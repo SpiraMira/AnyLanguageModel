@@ -104,6 +104,70 @@ import Testing
             }
         }
 
+        @Test func cancelledResponseSettlesBeforeReleasingSession() async throws {
+            let session = LanguageModelSession(model: model)
+            session.prewarm()
+
+            let responseTask = Task {
+                try await session.respond(
+                    to: "Count from 1 to 1,000 with one number per line.",
+                    options: .init(maximumResponseTokens: 512)
+                )
+            }
+
+            try await Task.sleep(for: .seconds(1))
+            responseTask.cancel()
+
+            do {
+                _ = try await responseTask.value
+                Issue.record("Expected the response to be cancelled.")
+            } catch is CancellationError {
+                // Expected.
+            }
+
+            let followUp = try await session.respond(to: "Reply with OK.")
+            #expect(!followUp.content.isEmpty)
+        }
+
+        @Test func cancelledStreamSettlesBeforeReleasingSession() async throws {
+            let session = LanguageModelSession(model: model)
+            session.prewarm()
+
+            let stream = session.streamResponse(
+                to: "Count from 1 to 1,000 with one number per line.",
+                options: .init(maximumResponseTokens: 512)
+            )
+            let consumerTask = Task {
+                for try await _ in stream {}
+            }
+
+            try await Task.sleep(for: .seconds(1))
+            consumerTask.cancel()
+            _ = await consumerTask.result
+
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(10))
+
+            while true {
+                do {
+                    let followUp: LanguageModelSession.Response<String> = try await model.respond(
+                        within: session,
+                        to: Prompt("Reply with OK."),
+                        generating: String.self,
+                        includeSchemaInPrompt: true,
+                        options: GenerationOptions()
+                    )
+                    #expect(!followUp.content.isEmpty)
+                    break
+                } catch let error as LanguageModelSession.GenerationError {
+                    guard case .concurrentRequests = error, clock.now < deadline else {
+                        throw error
+                    }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+            }
+        }
+
         @Test func withGenerationOptions() async throws {
             let session = LanguageModelSession(model: model)
 
