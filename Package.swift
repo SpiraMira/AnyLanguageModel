@@ -41,8 +41,10 @@ let package = Package(
         .package(url: "https://github.com/mattt/JSONSchema", from: "1.3.0"),
         .package(url: "https://github.com/mattt/llama.swift", .upToNextMajor(from: "2.7484.0")),
         .package(url: "https://github.com/mattt/PartialJSONDecoder", from: "1.0.0"),
-        // mlx-swift-lm must be >= 2.30.3 for generateTask cancellation and settlement ownership.
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.30.3"),
+        // DOWNSTREAM-ONLY (GrioKit integration; NOT for upstream PR): point mlx-swift-lm at
+        // the SpiraMira settlement fork so the package identity resolves to a single URL when
+        // GrioKit also pins the fork. Upstream should keep ml-explore/mlx-swift-lm >= 2.30.3.
+        .package(url: "https://github.com/SpiraMira/mlx-swift-lm", from: "2.31.4"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "600.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
     ],
