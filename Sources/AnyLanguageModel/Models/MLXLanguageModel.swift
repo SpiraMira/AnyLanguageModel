@@ -873,7 +873,12 @@ import Foundation
             // Get cached or load fresh ModelContext
             let context = try await loadContext(modelId: modelId, hub: hub, directory: directory)
             let generationScope = beginGenerationScope()
-            defer { endGenerationScope(generationScope) }
+            defer {
+                if Task.isCancelled {
+                    removeSessionCache(for: session)
+                }
+                endGenerationScope(generationScope)
+            }
 
             if type != String.self {
                 let jsonString = try await generateStructuredJSON(
@@ -930,27 +935,49 @@ import Foundation
                     context: context
                 )
 
-                // Generate
-                let stream = try MLXLMCommon.generate(
+                let iterator = try MLXLMCommon.TokenIterator(
                     input: resolved.input,
+                    model: context.model,
                     cache: resolved.cache,
-                    parameters: generateParameters,
-                    context: context
+                    parameters: generateParameters
+                )
+                let (stream, generationTask) = MLXLMCommon.generateTask(
+                    promptTokenCount: resolved.input.text.tokens.size,
+                    modelConfiguration: context.configuration,
+                    tokenizer: context.tokenizer,
+                    iterator: iterator
                 )
 
                 var chunks: [String] = []
                 var collectedToolCalls: [MLXLMCommon.ToolCall] = []
 
-                for await item in stream {
-                    switch item {
-                    case .chunk(let text):
-                        chunks.append(text)
-                    case .info:
-                        break
-                    case .toolCall(let call):
-                        collectedToolCalls.append(call)
+                do {
+                    try await withTaskCancellationHandler {
+                        for await item in stream {
+                            try Task.checkCancellation()
+
+                            switch item {
+                            case .chunk(let text):
+                                chunks.append(text)
+                            case .info:
+                                break
+                            case .toolCall(let call):
+                                collectedToolCalls.append(call)
+                            }
+                        }
+
+                        await generationTask.value
+                        try Task.checkCancellation()
+                    } onCancel: {
+                        generationTask.cancel()
                     }
+                } catch {
+                    generationTask.cancel()
+                    await generationTask.value
+                    removeSessionCache(for: session)
+                    throw error
                 }
+
                 storeSessionCache(
                     cache: resolved.cache,
                     fullTokens: resolved.fullTokens,
@@ -1054,27 +1081,12 @@ import Foundation
 
             let stream: AsyncThrowingStream<LanguageModelSession.ResponseStream<Content>.Snapshot, any Error> = .init {
                 continuation in
-                let didEndScope = Locked(false)
-                let didReleaseGenerationSlot = Locked(false)
                 let generationScope = GPUMemoryManager.shared.markActive(gpuMemory)
 
                 let task = Task { @Sendable in
-                    func finishScope() {
-                        didEndScope.withLock { done in
-                            if !done {
-                                GPUMemoryManager.shared.markIdle(scope: generationScope)
-                                done = true
-                            }
-                        }
-                    }
-
-                    func finishGenerationSlot() {
-                        didReleaseGenerationSlot.withLock { done in
-                            if !done {
-                                Self.releaseGenerationSlot(for: session)
-                                done = true
-                            }
-                        }
+                    defer {
+                        GPUMemoryManager.shared.markIdle(scope: generationScope)
+                        Self.releaseGenerationSlot(for: session)
                     }
 
                     do {
@@ -1106,27 +1118,47 @@ import Foundation
                             context: context
                         )
 
-                        let mlxStream = try MLXLMCommon.generate(
+                        let iterator = try MLXLMCommon.TokenIterator(
                             input: resolved.input,
+                            model: context.model,
                             cache: resolved.cache,
-                            parameters: generateParameters,
-                            context: context
+                            parameters: generateParameters
+                        )
+                        let (mlxStream, generationTask) = MLXLMCommon.generateTask(
+                            promptTokenCount: resolved.input.text.tokens.size,
+                            modelConfiguration: context.configuration,
+                            tokenizer: context.tokenizer,
+                            iterator: iterator
                         )
 
                         var accumulatedText = ""
-                        for await item in mlxStream {
-                            if Task.isCancelled { break }
+                        do {
+                            try await withTaskCancellationHandler {
+                                for await item in mlxStream {
+                                    try Task.checkCancellation()
 
-                            switch item {
-                            case .chunk(let text):
-                                accumulatedText += text
-                                let raw = GeneratedContent(accumulatedText)
-                                let content: Content.PartiallyGenerated = (accumulatedText as! Content)
-                                    .asPartiallyGenerated()
-                                continuation.yield(.init(content: content, rawContent: raw))
-                            case .info, .toolCall:
-                                break
+                                    switch item {
+                                    case .chunk(let text):
+                                        accumulatedText += text
+                                        let raw = GeneratedContent(accumulatedText)
+                                        let content: Content.PartiallyGenerated = (accumulatedText as! Content)
+                                            .asPartiallyGenerated()
+                                        continuation.yield(.init(content: content, rawContent: raw))
+                                    case .info, .toolCall:
+                                        break
+                                    }
+                                }
+
+                                await generationTask.value
+                                try Task.checkCancellation()
+                            } onCancel: {
+                                generationTask.cancel()
                             }
+                        } catch {
+                            generationTask.cancel()
+                            await generationTask.value
+                            removeSessionCache(for: session)
+                            throw error
                         }
 
                         storeSessionCache(
@@ -1135,28 +1167,12 @@ import Foundation
                             generateParameters: generateParameters,
                             session: session
                         )
-                        finishScope()
-                        finishGenerationSlot()
                         continuation.finish()
                     } catch {
-                        finishScope()
-                        finishGenerationSlot()
                         continuation.finish(throwing: error)
                     }
                 }
                 continuation.onTermination = { _ in
-                    didEndScope.withLock { done in
-                        if !done {
-                            GPUMemoryManager.shared.markIdle(scope: generationScope)
-                            done = true
-                        }
-                    }
-                    didReleaseGenerationSlot.withLock { done in
-                        if !done {
-                            Self.releaseGenerationSlot(for: session)
-                            done = true
-                        }
-                    }
                     task.cancel()
                 }
             }

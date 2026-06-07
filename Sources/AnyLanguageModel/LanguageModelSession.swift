@@ -132,8 +132,10 @@ public final class LanguageModelSession: @unchecked Sendable {
         let session = self
         let relay = AsyncThrowingStream<ResponseStream<Content>.Snapshot, any Error> { continuation in
             let stream = upstream
-            Task {
+            let relayTask = Task {
                 session.beginResponding()
+                defer { session.endResponding() }
+
                 var lastSnapshot: ResponseStream<Content>.Snapshot?
                 do {
                     for try await snapshot in stream {
@@ -165,7 +167,11 @@ public final class LanguageModelSession: @unchecked Sendable {
                 } catch {
                     continuation.finish(throwing: error)
                 }
-                session.endResponding()
+            }
+            continuation.onTermination = { termination in
+                if case .cancelled = termination {
+                    relayTask.cancel()
+                }
             }
         }
         return ResponseStream(stream: relay)
