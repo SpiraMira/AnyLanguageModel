@@ -31,7 +31,7 @@ let package = Package(
     dependencies: [
         // downstream(grio): swift-transformers repointed at the SpiraMira fork carrying
         // the Core ML generation cancellation + background-GPU fix (drop before upstream merge).
-        .package(url: "https://github.com/SpiraMira/swift-transformers", branch: "integration"),
+        .package(url: "https://github.com/SpiraMira/swift-transformers", .upToNextMinor(from: "1.2.0")),
         .package(
             url: "https://github.com/mattt/EventSource",
             from: "1.3.0",
