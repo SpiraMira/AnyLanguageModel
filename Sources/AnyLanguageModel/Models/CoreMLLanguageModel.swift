@@ -112,7 +112,7 @@
             // Reset model state for new generation
             await model.resetState()
 
-            let outputTokens = await model.generate(
+            let outputTokens = try await model.generate(
                 config: generationConfig,
                 tokens: tokens,
                 model: model.callAsFunction
@@ -190,7 +190,7 @@
                         let promptTokenCount = tokens.count
                         var accumulatedText = ""
 
-                        _ = await model.generate(
+                        _ = try await model.generate(
                             config: generationConfig,
                             tokens: tokens,
                             model: model.callAsFunction
@@ -372,7 +372,7 @@
             await model.resetState()
 
             let tokenTensor = MLTensor(promptTokens.map(Int32.init)).expandingShape(at: 0)
-            let initialLogits = await model.predictNextTokenScores(tokenTensor, config: generationConfig)
+            let initialLogits = try await model.predictNextTokenScores(tokenTensor, config: generationConfig)
             let endTokens: Set<Int> = []
 
             let backend = try CoreMLTokenBackend(
@@ -504,7 +504,7 @@
                 tokens.append(token)
                 remainingTokens -= 1
                 let tokenTensor = MLTensor(tokens.map(Int32.init)).expandingShape(at: 0)
-                currentLogits = await model.predictNextTokenScores(tokenTensor, config: config)
+                currentLogits = try await model.predictNextTokenScores(tokenTensor, config: config)
             }
 
             mutating func sample(from allowedTokens: Set<Int>) async throws -> Int {
