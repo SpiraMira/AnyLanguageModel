@@ -121,6 +121,12 @@ public struct GenerationOptions: Sendable, Equatable, Codable {
     /// an error will be thrown.
     public var maximumResponseTokens: Int?
 
+    /// An optional caller policy that can stop generation early, evaluated per token
+    /// by backends that support it (currently Core ML). Use this for host-driven
+    /// early termination — deadlines, lifecycle/availability gating, supersession —
+    /// that is *not* task cancellation. Leaving it `nil` imposes no early stop.
+    public var stopCondition: StopCondition?
+
     /// Storage for model-specific custom options.
     private var customOptionsStorage: CustomOptionsStorage = .init()
 
@@ -166,6 +172,30 @@ public struct GenerationOptions: Sendable, Equatable, Codable {
         self.temperature = temperature
         self.maximumResponseTokens = maximumResponseTokens
     }
+}
+
+// MARK: - Stop Condition
+
+/// A caller-supplied policy that stops generation early, evaluated once per token.
+///
+/// This is distinct from Swift task cancellation: cancellation means the work was
+/// abandoned (the call throws `CancellationError`); a stop condition means the
+/// caller's policy says stop here, and the partial result is returned cleanly.
+///
+/// `Equatable`/`Codable` are trivial — a closure has no meaningful value identity —
+/// so `GenerationOptions` keeps synthesized conformances; the condition is never
+/// encoded and two options differing only by stop condition compare equal.
+public struct StopCondition: Sendable, Equatable, Codable {
+    /// Returns `true` to stop generation now.
+    public let shouldStop: @Sendable () -> Bool
+
+    public init(_ shouldStop: @escaping @Sendable () -> Bool) {
+        self.shouldStop = shouldStop
+    }
+
+    public static func == (lhs: StopCondition, rhs: StopCondition) -> Bool { true }
+    public func encode(to encoder: any Encoder) throws {}
+    public init(from decoder: any Decoder) throws { self.shouldStop = { false } }
 }
 
 // MARK: - Custom Generation Options

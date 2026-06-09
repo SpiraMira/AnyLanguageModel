@@ -6,6 +6,20 @@
     @preconcurrency import Generation
     @preconcurrency import Models
 
+    /// Adapts a host `GenerationOptions.StopCondition` (a per-call "stop now?" closure)
+    /// to swift-transformers' `StoppingCriteria`. Token/score arguments are ignored —
+    /// the host policy is availability/lifecycle/supersession, not token-content.
+    @available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, watchOS 11.0, *)
+    private struct HostStoppingCriteria: StoppingCriteria {
+        let stop: @Sendable () -> Bool
+        func shouldStop(tokens: [Int], scores: MLTensor?) -> Bool { stop() }
+    }
+
+    @available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, watchOS 11.0, *)
+    private func hostStoppingCriteria(for options: GenerationOptions) -> [any StoppingCriteria] {
+        options.stopCondition.map { [HostStoppingCriteria(stop: $0.shouldStop)] } ?? []
+    }
+
     /// A language model that runs locally using Core ML.
     ///
     /// Use this model to run language models on-device with Core ML.
@@ -115,7 +129,8 @@
             let outputTokens = try await model.generate(
                 config: generationConfig,
                 tokens: tokens,
-                model: model.callAsFunction
+                model: model.callAsFunction,
+                stoppingCriteria: hostStoppingCriteria(for: options)
             )
 
             // Strip the prompt at the token level to avoid issues with
@@ -193,7 +208,8 @@
                         _ = try await model.generate(
                             config: generationConfig,
                             tokens: tokens,
-                            model: model.callAsFunction
+                            model: model.callAsFunction,
+                            stoppingCriteria: hostStoppingCriteria(for: options)
                         ) { tokenIds in
                             let assistantTokenSlice: ArraySlice<Int>
                             if tokenIds.count >= promptTokenCount {
