@@ -46,7 +46,7 @@ let package = Package(
         // DOWNSTREAM-ONLY (GrioKit integration; NOT for upstream PR): point mlx-swift-lm at
         // the SpiraMira settlement fork so the package identity resolves to a single URL when
         // GrioKit also pins the fork. Upstream should keep ml-explore/mlx-swift-lm >= 2.30.3.
-        .package(url: "https://github.com/SpiraMira/mlx-swift-lm", from: "2.31.4"),
+        .package(url: "https://github.com/SpiraMira/mlx-swift-lm", from: "2.31.6"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "600.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
     ],
