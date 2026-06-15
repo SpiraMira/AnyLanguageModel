@@ -2,6 +2,8 @@ import Testing
 @testable import AnyLanguageModel
 
 #if canImport(FoundationModels)
+    import struct FoundationModels.GenerationOptions
+
     private let isSystemLanguageModelAvailable = {
         if #available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) {
             return SystemLanguageModel.default.isAvailable
@@ -91,6 +93,86 @@ import Testing
         #expect(schema.defs[nestedTypeName] != nil)
     }
 
+    @Suite("SystemLanguageModel option conversion")
+    struct SystemLanguageModelOptionConversionTests {
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test func emptyOptionsUseFoundationModelsDefaults() {
+            let actual = AnyLanguageModel.GenerationOptions().toFoundationModels()
+            let expected = FoundationModels.GenerationOptions()
+
+            #expect(actual == expected)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test func temperatureAndMaximumResponseTokensAreForwarded() {
+            let actual = AnyLanguageModel.GenerationOptions(
+                temperature: 0.4,
+                maximumResponseTokens: 256
+            )
+            .toFoundationModels()
+            let expected = FoundationModels.GenerationOptions(
+                temperature: 0.4,
+                maximumResponseTokens: 256
+            )
+
+            #expect(actual == expected)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test func greedySamplingIsForwarded() {
+            let actual = AnyLanguageModel.GenerationOptions(sampling: .greedy)
+                .toFoundationModels()
+            let expected = FoundationModels.GenerationOptions(sampling: .greedy)
+
+            #expect(actual == expected)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test(arguments: [nil, UInt64(42)])
+        func topKSamplingIsForwarded(seed: UInt64?) {
+            let actual = AnyLanguageModel.GenerationOptions(
+                sampling: .random(top: 40, seed: seed)
+            )
+            .toFoundationModels()
+            let expected = FoundationModels.GenerationOptions(
+                sampling: .random(top: 40, seed: seed)
+            )
+
+            #expect(actual == expected)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test(arguments: [nil, UInt64(42)])
+        func topPSamplingIsForwarded(seed: UInt64?) {
+            let actual = AnyLanguageModel.GenerationOptions(
+                sampling: .random(probabilityThreshold: 0.9, seed: seed)
+            )
+            .toFoundationModels()
+            let expected = FoundationModels.GenerationOptions(
+                sampling: .random(probabilityThreshold: 0.9, seed: seed)
+            )
+
+            #expect(actual == expected)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test func combinedOptionsRetainEverySupportedValue() {
+            let actual = AnyLanguageModel.GenerationOptions(
+                sampling: .random(probabilityThreshold: 0.95, seed: 7),
+                temperature: 0.2,
+                maximumResponseTokens: 128
+            )
+            .toFoundationModels()
+            let expected = FoundationModels.GenerationOptions(
+                sampling: .random(probabilityThreshold: 0.95, seed: 7),
+                temperature: 0.2,
+                maximumResponseTokens: 128
+            )
+
+            #expect(actual == expected)
+        }
+    }
+
     @Suite(
         "SystemLanguageModel",
         .enabled(if: isSystemLanguageModelAvailable)
@@ -122,11 +204,25 @@ import Testing
             let model: SystemLanguageModel = SystemLanguageModel()
             let session = LanguageModelSession(model: model)
 
-            let options = GenerationOptions(temperature: 0.5)
+            let options = AnyLanguageModel.GenerationOptions(temperature: 0.5)
             let response = try await session.respond(
                 to: "Generate a number",
                 options: options
             )
+            #expect(!response.content.isEmpty)
+        }
+
+        @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+        @Test func prewarmedSessionResponds() async throws {
+            let model = SystemLanguageModel()
+            let session = LanguageModelSession(
+                model: model,
+                instructions: "Reply briefly."
+            )
+
+            session.prewarm(promptPrefix: Prompt("Say hello"))
+            let response = try await session.respond(to: "Say hello")
+
             #expect(!response.content.isEmpty)
         }
 
