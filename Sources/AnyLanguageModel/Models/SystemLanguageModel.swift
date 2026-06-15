@@ -19,6 +19,7 @@
         public typealias UnavailableReason = FoundationModels.SystemLanguageModel.Availability.UnavailableReason
 
         let systemModel: FoundationModels.SystemLanguageModel
+        private let prewarmedSessions = PrewarmedSessionStore()
 
         /// The default system language model.
         public static var `default`: SystemLanguageModel {
@@ -65,6 +66,29 @@
             }
         }
 
+        /// The languages supported by the underlying Apple system model.
+        nonisolated public var supportedLanguages: Set<Locale.Language> {
+            systemModel.supportedLanguages
+        }
+
+        /// Returns whether the underlying Apple system model supports a locale.
+        nonisolated public func supportsLocale(_ locale: Locale = .current) -> Bool {
+            systemModel.supportsLocale(locale)
+        }
+
+        nonisolated public func prewarm(
+            for session: LanguageModelSession,
+            promptPrefix: Prompt?
+        ) {
+            let foundationModelsSession = makeFoundationModelsSession(for: session)
+            foundationModelsSession.prewarm(promptPrefix: promptPrefix?.toFoundationModels())
+            prewarmedSessions.set(
+                foundationModelsSession,
+                for: session,
+                transcript: session.transcript
+            )
+        }
+
         nonisolated public func respond<Content>(
             within session: LanguageModelSession,
             to prompt: Prompt,
@@ -75,16 +99,13 @@
             let fmPrompt = prompt.toFoundationModels()
             let fmOptions = options.toFoundationModels()
 
-            let fmSession = FoundationModels.LanguageModelSession(
-                model: systemModel,
-                tools: session.tools.toFoundationModels(),
-                transcript: session.transcript.toFoundationModels(
-                    instructions: session.instructions,
-                    toolDefinitions: session.tools
-                        .filter(\.includesSchemaInInstructions)
-                        .map { Transcript.ToolDefinition(tool: $0) }
+            let fmSession =
+                prewarmedSessions.takeCompatibleSession(
+                    for: session,
+                    currentTranscript: session.transcript,
+                    prompt: prompt
                 )
-            )
+                ?? makeFoundationModelsSession(for: session)
 
             if type == String.self {
                 let fmResponse = try await fmSession.respond(to: fmPrompt, options: fmOptions)
@@ -156,16 +177,13 @@
             let fmPrompt = prompt.toFoundationModels()
             let fmOptions = options.toFoundationModels()
 
-            let fmSession = FoundationModels.LanguageModelSession(
-                model: systemModel,
-                tools: session.tools.toFoundationModels(),
-                transcript: session.transcript.toFoundationModels(
-                    instructions: session.instructions,
-                    toolDefinitions: session.tools
-                        .filter(\.includesSchemaInInstructions)
-                        .map { Transcript.ToolDefinition(tool: $0) }
+            let fmSession =
+                prewarmedSessions.takeCompatibleSession(
+                    for: session,
+                    currentTranscript: session.transcript,
+                    prompt: prompt
                 )
-            )
+                ?? makeFoundationModelsSession(for: session)
 
             let stream: AsyncThrowingStream<LanguageModelSession.ResponseStream<Content>.Snapshot, Error> =
                 AsyncThrowingStream { continuation in
@@ -363,6 +381,102 @@
             )
         }
 
+        nonisolated private func makeFoundationModelsSession(
+            for session: LanguageModelSession
+        ) -> FoundationModels.LanguageModelSession {
+            FoundationModels.LanguageModelSession(
+                model: systemModel,
+                tools: session.tools.toFoundationModels(),
+                transcript: session.transcript.toFoundationModels(
+                    instructions: session.instructions,
+                    toolDefinitions: session.tools
+                        .filter(\.includesSchemaInInstructions)
+                        .map { Transcript.ToolDefinition(tool: $0) }
+                )
+            )
+        }
+
+        private final class PrewarmedSessionStore: @unchecked Sendable {
+            private final class WeakSessionReference: @unchecked Sendable {
+                weak var session: LanguageModelSession?
+
+                init(_ session: LanguageModelSession) {
+                    self.session = session
+                }
+            }
+
+            private struct Entry: @unchecked Sendable {
+                let sessionReference: WeakSessionReference
+                let transcript: Transcript
+                let foundationModelsSession: FoundationModels.LanguageModelSession
+            }
+
+            private let lock = NSLock()
+            private var entries: [ObjectIdentifier: Entry] = [:]
+
+            func set(
+                _ foundationModelsSession: FoundationModels.LanguageModelSession,
+                for session: LanguageModelSession,
+                transcript: Transcript
+            ) {
+                lock.withLock {
+                    reapDeadSessionsLocked()
+                    entries[ObjectIdentifier(session)] = Entry(
+                        sessionReference: WeakSessionReference(session),
+                        transcript: transcript,
+                        foundationModelsSession: foundationModelsSession
+                    )
+                }
+            }
+
+            func takeCompatibleSession(
+                for session: LanguageModelSession,
+                currentTranscript: Transcript,
+                prompt: Prompt
+            ) -> FoundationModels.LanguageModelSession? {
+                lock.withLock {
+                    reapDeadSessionsLocked()
+
+                    let id = ObjectIdentifier(session)
+                    guard let entry = entries.removeValue(forKey: id),
+                        transcriptBeforeCurrentPrompt(
+                            currentTranscript,
+                            matching: prompt
+                        ) == entry.transcript
+                    else {
+                        return nil
+                    }
+
+                    return entry.foundationModelsSession
+                }
+            }
+
+            private func transcriptBeforeCurrentPrompt(
+                _ transcript: Transcript,
+                matching prompt: Prompt
+            ) -> Transcript? {
+                guard let lastEntry = transcript.last,
+                    case .prompt(let promptEntry) = lastEntry,
+                    promptEntry.segments.count == 1,
+                    case .text(let textSegment) = promptEntry.segments[0],
+                    textSegment.content == prompt.description
+                else {
+                    return nil
+                }
+
+                return Transcript(entries: transcript.dropLast())
+            }
+
+            private func reapDeadSessionsLocked() {
+                let deadSessionIDs = entries.compactMap { id, entry in
+                    entry.sessionReference.session == nil ? id : nil
+                }
+                for id in deadSessionIDs {
+                    entries[id] = nil
+                }
+            }
+        }
+
     }
 
     // MARK: - Helpers
@@ -383,17 +497,26 @@
 
     @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
     extension GenerationOptions {
-        fileprivate func toFoundationModels() -> FoundationModels.GenerationOptions {
-            var options = FoundationModels.GenerationOptions()
+        func toFoundationModels() -> FoundationModels.GenerationOptions {
+            FoundationModels.GenerationOptions(
+                sampling: sampling?.toFoundationModels(),
+                temperature: temperature,
+                maximumResponseTokens: maximumResponseTokens
+            )
+        }
+    }
 
-            if let temperature = self.temperature {
-                options.temperature = temperature
+    @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+    extension GenerationOptions.SamplingMode {
+        func toFoundationModels() -> FoundationModels.GenerationOptions.SamplingMode {
+            switch mode {
+            case .greedy:
+                .greedy
+            case .topK(let value, let seed):
+                .random(top: value, seed: seed)
+            case .nucleus(let threshold, let seed):
+                .random(probabilityThreshold: threshold, seed: seed)
             }
-
-            // Note: FoundationModels.GenerationOptions may not have all properties
-            // Only set those that are available
-
-            return options
         }
     }
 
