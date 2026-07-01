@@ -498,7 +498,26 @@
     @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
     extension GenerationOptions {
         func toFoundationModels() -> FoundationModels.GenerationOptions {
-            FoundationModels.GenerationOptions(
+            // Portable across SDKs: `#if compiler(>=6.4)` compiles the OS 27 path only when building
+            // with the Xcode 27 (beta) toolchain — so Xcode 26 skips it entirely and never sees the
+            // 27-only symbol. `#available` then gates it to OS 27 at runtime; the deployment floor
+            // stays 26 via the fall-through 26 initializer (which is itself forward-compatible to 27).
+            //
+            // KNOBS to confirm when you first build on the OS 27 beta SDK:
+            //   • the compiler gate — set to the Swift version bundled with the Xcode 27 beta.
+            //   • the 27 initializer's first parameter label (`samplingMode:` per the 27 docs vs the
+            //     26 `sampling:`), if Apple changed it.
+            #if compiler(>=6.4)
+            if #available(macOS 27.0, iOS 27.0, visionOS 27.0, *) {
+                return FoundationModels.GenerationOptions(
+                    samplingMode: sampling?.toFoundationModels(),
+                    temperature: temperature,
+                    maximumResponseTokens: maximumResponseTokens,
+                    toolCallingMode: nil
+                )
+            }
+            #endif
+            return FoundationModels.GenerationOptions(
                 sampling: sampling?.toFoundationModels(),
                 temperature: temperature,
                 maximumResponseTokens: maximumResponseTokens
