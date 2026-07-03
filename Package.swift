@@ -31,12 +31,11 @@ let package = Package(
     dependencies: [
         // downstream(grio): swift-transformers repointed at the SpiraMira fork carrying
         // the Core ML generation cancellation fix (#364) plus the `StoppingCriteria` +
-        // `EosTokenCriteria` feature (drop before upstream merge).
-        // Revision-pinned (not a version range): the API this fork uses lives on the fork's
-        // `integration` branch, which sits on 1.3.3 + 2 untagged commits (fix, then feature).
-        // A version range can only reach tags and no tag carries this API, so pin the exact
-        // integration commit.
+        // `EosTokenCriteria` feature (drop before upstream merge). Revision-pinned to the
+        // fork's `integration` branch (upstream 1.3.3 + fix + feature); no tag carries this
+        // API, and GrioKit pins the same revision (one URL per package identity).
         .package(url: "https://github.com/SpiraMira/swift-transformers", revision: "76f92d561530f7edb48e8432159be06ae3f697f6"),
+        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
         .package(
             url: "https://github.com/mattt/EventSource",
             from: "1.3.0",
@@ -48,11 +47,13 @@ let package = Package(
         .package(url: "https://github.com/mattt/JSONSchema", from: "1.3.0"),
         .package(url: "https://github.com/mattt/llama.swift", .upToNextMajor(from: "2.7484.0")),
         .package(url: "https://github.com/mattt/PartialJSONDecoder", from: "1.0.0"),
-        // DOWNSTREAM-ONLY (GrioKit integration; NOT for upstream PR): point mlx-swift-lm at
-        // the SpiraMira settlement fork so the package identity resolves to a single URL when
-        // GrioKit also pins the fork. Upstream should keep ml-explore/mlx-swift-lm >= 2.30.3.
-        .package(url: "https://github.com/SpiraMira/mlx-swift-lm", from: "2.31.6"),
-        .package(url: "https://github.com/swiftlang/swift-syntax", from: "600.0.0"),
+        // DOWNSTREAM-ONLY (GrioKit integration; NOT for upstream PR): point mlx-swift-lm at the
+        // SpiraMira fork — 3.x line = canonical ml-explore 3.31.4 + the cancellation-submission-race
+        // fix (#382) — so the identity resolves to a single URL when GrioKit also pins the fork.
+        // Revision-pinned to the fork's `integration` branch. Upstream should keep
+        // ml-explore/mlx-swift-lm >= 3.0.0.
+        .package(url: "https://github.com/SpiraMira/mlx-swift-lm", revision: "2f93db5bb708d253d853fba992e5a463f11cc0bf"),
+        .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.24.0"),
     ],
     targets: [
@@ -76,6 +77,21 @@ let package = Package(
                 .product(
                     name: "MLXLMCommon",
                     package: "mlx-swift-lm",
+                    condition: .when(traits: ["MLX"])
+                ),
+                .product(
+                    name: "MLXHuggingFace",
+                    package: "mlx-swift-lm",
+                    condition: .when(traits: ["MLX"])
+                ),
+                .product(
+                    name: "HuggingFace",
+                    package: "swift-huggingface",
+                    condition: .when(traits: ["MLX"])
+                ),
+                .product(
+                    name: "Tokenizers",
+                    package: "swift-transformers",
                     condition: .when(traits: ["MLX"])
                 ),
                 .product(
