@@ -30,12 +30,13 @@ let package = Package(
     ],
     dependencies: [
         // downstream(grio): swift-transformers repointed at the SpiraMira fork carrying
-        // the Core ML generation cancellation + background-GPU fix (drop before upstream merge).
-        // Revision-pinned (not a version range): the CoreML-cancellation API this fork uses
-        // (`StoppingCriteria` + `EosTokenCriteria`) lives on 0ea7ddf9 (= 1.2.2 + 1 untagged commit).
-        // A version range can only reach tags; the 1.2.2 tag predates `EosTokenCriteria`, so a
-        // range re-resolve breaks the build. Pin the exact commit that carries both.
-        .package(url: "https://github.com/SpiraMira/swift-transformers", revision: "0ea7ddf91d6d47c7815c0598174537e0af4283f5"),
+        // the Core ML generation cancellation fix (#364) plus the `StoppingCriteria` +
+        // `EosTokenCriteria` feature (drop before upstream merge).
+        // Revision-pinned (not a version range): the API this fork uses lives on the fork's
+        // `integration` branch, which sits on 1.3.3 + 2 untagged commits (fix, then feature).
+        // A version range can only reach tags and no tag carries this API, so pin the exact
+        // integration commit.
+        .package(url: "https://github.com/SpiraMira/swift-transformers", revision: "76f92d561530f7edb48e8432159be06ae3f697f6"),
         .package(
             url: "https://github.com/mattt/EventSource",
             from: "1.3.0",
